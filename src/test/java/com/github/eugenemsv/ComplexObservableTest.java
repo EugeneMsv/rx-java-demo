@@ -2,14 +2,19 @@ package com.github.eugenemsv;
 
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.observables.ConnectableObservable;
+import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class ComplexObservableTest {
 
@@ -73,6 +78,72 @@ public class ComplexObservableTest {
         values.blockingSubscribe(successResult::append);
 
         assertEquals("Hello World!", successResult.toString());
+    }
+
+
+    @Test
+    void testObtainObservedValuesInNewThread() throws InterruptedException {
+        StringBuilder successResult = new StringBuilder();
+        AtomicLong threadId = new AtomicLong();
+        Observable.fromArray("Hello", " ", "World", "!")
+                .observeOn(Schedulers.newThread())
+                .subscribe(element ->
+                        {
+                            successResult.append(element);
+                            threadId.set(Thread.currentThread().getId());
+                        }
+                );
+
+        TimeUnit.SECONDS.sleep(5);
+        assertEquals("Hello World!", successResult.toString());
+        assertNotEquals(Thread.currentThread().getId(), threadId.get());
+    }
+
+
+    @Test
+    public void testSchedulerFromExecutorWorkInParallel() throws InterruptedException {
+        StringBuilder successResult = new StringBuilder();
+        Set<Long> threadIds = new CopyOnWriteArraySet<>();
+
+        ExecutorService executorThreadPool = Executors.newFixedThreadPool(4);
+        Observable.fromArray("Hello", " ", "World", "!")
+                //Because we want to modify each element concurrently we are using flatMap
+                .flatMap(val -> Observable.just(val)
+                        .subscribeOn(Schedulers.from(executorThreadPool))
+                        .map(element -> {
+                            System.out.println(Thread.currentThread().getName() + " got element = " + element);
+                            TimeUnit.SECONDS.sleep(2);
+                            threadIds.add(Thread.currentThread().getId());
+                            return element.toUpperCase();
+                        }))
+                .subscribe(successResult::append);
+
+        TimeUnit.SECONDS.sleep(5);
+        String successResultString = successResult.toString();
+        assertTrue(successResultString.contains("!"));
+        assertTrue(successResultString.contains("HELLO"));
+        assertTrue(successResultString.contains("WORLD"));
+        assertTrue(successResultString.contains(" "));
+        assertTrue(threadIds.size() > 1);
+        assertFalse(threadIds.contains(Thread.currentThread().getId()));
+    }
+
+
+    @Test
+    public void testSchedulerDelay() throws InterruptedException {
+        StringBuilder successResult = new StringBuilder();
+        AtomicLong threadId = new AtomicLong();
+
+        Observable.fromArray("Hello", " ", "World", "!")
+                .delay(1, TimeUnit.SECONDS, Schedulers.newThread())
+                .subscribe(element -> {
+                    successResult.append(element);
+                    threadId.set(Thread.currentThread().getId());
+                });
+
+        TimeUnit.SECONDS.sleep(5);
+        assertEquals("Hello World!", successResult.toString());
+        assertNotEquals(Thread.currentThread().getId(), threadId.get());
     }
 
 }
